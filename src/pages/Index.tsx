@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Icon from '@/components/ui/icon';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
@@ -8,12 +8,21 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+
+type Reaction = {
+  emoji: string;
+  user_id: number;
+};
 
 type Message = {
   id: number;
   text: string;
   time: string;
   is_mine: boolean;
+  is_removed?: boolean;
+  edited_at?: string;
+  reactions?: Reaction[];
 };
 
 type Chat = {
@@ -36,6 +45,8 @@ type Contact = {
 
 const API_URL = 'https://functions.poehali.dev/ca69d9f0-0b40-41cb-bc47-3549a3af0389';
 
+const EMOJI_LIST = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+
 const Index = () => {
   const [activeSection, setActiveSection] = useState<'chats' | 'contacts' | 'settings' | 'profile' | 'search' | 'archive'>('chats');
   const [activeChat, setActiveChat] = useState<number | null>(1);
@@ -49,6 +60,10 @@ const Index = () => {
   const [selectedAdmins, setSelectedAdmins] = useState<number[]>([]);
   const [groupName, setGroupName] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState('');
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -59,6 +74,8 @@ const Index = () => {
   useEffect(() => {
     if (activeChat) {
       loadMessages(activeChat);
+      const interval = setInterval(() => loadTypingStatus(activeChat), 3000);
+      return () => clearInterval(interval);
     }
   }, [activeChat]);
 
@@ -95,6 +112,42 @@ const Index = () => {
     }
   };
 
+  const loadTypingStatus = async (chatId: number) => {
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'get_typing', chat_id: chatId })
+      });
+      const data = await response.json();
+      setTypingUsers(data.typing || []);
+    } catch (error) {
+      console.error('Failed to load typing status');
+    }
+  };
+
+  const handleTyping = async () => {
+    if (!activeChat) return;
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    try {
+      await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set_typing', chat_id: activeChat, user_id: 1 })
+      });
+    } catch (error) {
+      console.error('Failed to set typing status');
+    }
+
+    typingTimeoutRef.current = setTimeout(() => {
+      setTypingUsers([]);
+    }, 5000);
+  };
+
   const handleSendMessage = async () => {
     if (!messageText.trim() || !activeChat) return;
 
@@ -118,6 +171,85 @@ const Index = () => {
       }
     } catch (error) {
       toast({ title: 'Ошибка', description: 'Не удалось отправить сообщение', variant: 'destructive' });
+    }
+  };
+
+  const handleEditMessage = async (messageId: number) => {
+    if (!editingText.trim()) return;
+
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'edit_message',
+          message_id: messageId,
+          text: editingText
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setMessages(messages.map(m => 
+          m.id === messageId ? { ...m, text: editingText, edited_at: new Date().toISOString() } : m
+        ));
+        setEditingMessageId(null);
+        setEditingText('');
+        toast({ title: 'Успешно', description: 'Сообщение отредактировано' });
+      }
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось отредактировать сообщение', variant: 'destructive' });
+    }
+  };
+
+  const handleDeleteMessage = async (messageId: number) => {
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'delete_message',
+          message_id: messageId
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setMessages(messages.map(m => 
+          m.id === messageId ? { ...m, text: 'Сообщение удалено', is_removed: true } : m
+        ));
+        toast({ title: 'Успешно', description: 'Сообщение удалено' });
+      }
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось удалить сообщение', variant: 'destructive' });
+    }
+  };
+
+  const handleAddReaction = async (messageId: number, emoji: string) => {
+    try {
+      await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add_reaction',
+          message_id: messageId,
+          emoji,
+          user_id: 1
+        })
+      });
+
+      setMessages(messages.map(m => {
+        if (m.id === messageId) {
+          const reactions = m.reactions || [];
+          const existingReaction = reactions.find(r => r.user_id === 1 && r.emoji === emoji);
+          if (!existingReaction) {
+            return { ...m, reactions: [...reactions, { emoji, user_id: 1 }] };
+          }
+        }
+        return m;
+      }));
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось добавить реакцию', variant: 'destructive' });
     }
   };
 
@@ -414,7 +546,9 @@ const Index = () => {
                 </Avatar>
                 <div>
                   <h3 className="font-medium">{chats.find(c => c.id === activeChat)?.name}</h3>
-                  <p className="text-xs text-muted-foreground">был(-а) недавно</p>
+                  <p className="text-xs text-muted-foreground">
+                    {typingUsers.length > 0 ? `${typingUsers[0]} печатает...` : 'был(-а) недавно'}
+                  </p>
                 </div>
               </div>
               <div className="flex gap-2">
@@ -442,15 +576,98 @@ const Index = () => {
                       key={message.id}
                       className={`flex ${message.is_mine ? 'justify-end' : 'justify-start'}`}
                     >
-                      <div
-                        className={`max-w-md px-4 py-2 rounded-2xl ${
-                          message.is_mine
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-secondary text-secondary-foreground'
-                        }`}
-                      >
-                        <p className="text-sm">{message.text}</p>
-                        <span className="text-xs opacity-70 mt-1 block">{message.time}</span>
+                      <div className="flex flex-col">
+                        <div
+                          className={`max-w-md px-4 py-2 rounded-2xl relative group ${
+                            message.is_mine
+                              ? 'bg-primary text-primary-foreground'
+                              : 'bg-secondary text-secondary-foreground'
+                          } ${message.is_removed ? 'opacity-50 italic' : ''}`}
+                        >
+                          {editingMessageId === message.id ? (
+                            <div className="space-y-2">
+                              <Input
+                                value={editingText}
+                                onChange={(e) => setEditingText(e.target.value)}
+                                onKeyPress={(e) => e.key === 'Enter' && handleEditMessage(message.id)}
+                                className="bg-background text-foreground"
+                              />
+                              <div className="flex gap-2">
+                                <Button size="sm" onClick={() => handleEditMessage(message.id)}>Сохранить</Button>
+                                <Button size="sm" variant="ghost" onClick={() => setEditingMessageId(null)}>Отмена</Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-sm">{message.text}</p>
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-xs opacity-70">{message.time}</span>
+                                {message.edited_at && <span className="text-xs opacity-70">изм.</span>}
+                              </div>
+                            </>
+                          )}
+
+                          {message.is_mine && !message.is_removed && editingMessageId !== message.id && (
+                            <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button size="icon" variant="ghost" className="h-6 w-6">
+                                    <Icon name="MoreVertical" size={14} />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent>
+                                  <DropdownMenuItem onClick={() => {
+                                    setEditingMessageId(message.id);
+                                    setEditingText(message.text);
+                                  }}>
+                                    Редактировать
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => handleDeleteMessage(message.id)}>
+                                    Удалить
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          )}
+                        </div>
+
+                        {!message.is_removed && (
+                          <div className="flex items-center gap-2 mt-1">
+                            {message.reactions && message.reactions.length > 0 && (
+                              <div className="flex gap-1">
+                                {Array.from(new Set(message.reactions.map(r => r.emoji))).map((emoji) => {
+                                  const count = message.reactions!.filter(r => r.emoji === emoji).length;
+                                  return (
+                                    <span key={emoji} className="text-xs px-2 py-0.5 bg-secondary rounded-full">
+                                      {emoji} {count > 1 && count}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button size="sm" variant="ghost" className="h-6 opacity-50 hover:opacity-100">
+                                  <Icon name="Smile" size={14} />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent>
+                                <div className="flex gap-1 p-2">
+                                  {EMOJI_LIST.map(emoji => (
+                                    <button
+                                      key={emoji}
+                                      onClick={() => handleAddReaction(message.id, emoji)}
+                                      className="text-lg hover:scale-125 transition-transform"
+                                    >
+                                      {emoji}
+                                    </button>
+                                  ))}
+                                </div>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -466,7 +683,10 @@ const Index = () => {
                 <Input
                   placeholder="Написать сообщение..."
                   value={messageText}
-                  onChange={(e) => setMessageText(e.target.value)}
+                  onChange={(e) => {
+                    setMessageText(e.target.value);
+                    handleTyping();
+                  }}
                   onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                   className="bg-secondary border-0"
                 />
