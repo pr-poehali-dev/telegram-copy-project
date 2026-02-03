@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Icon from '@/components/ui/icon';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
@@ -7,23 +7,24 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
+import { useToast } from '@/hooks/use-toast';
 
 type Message = {
   id: number;
   text: string;
   time: string;
-  isMine: boolean;
+  is_mine: boolean;
 };
 
 type Chat = {
   id: number;
   name: string;
-  lastMessage: string;
+  last_message: string;
   time: string;
   unread: number;
   avatar: string;
-  isGroup?: boolean;
-  isArchived?: boolean;
+  is_group?: boolean;
+  is_archived?: boolean;
 };
 
 type Contact = {
@@ -33,45 +34,130 @@ type Contact = {
   status: string;
 };
 
+const API_URL = 'https://functions.poehali.dev/ca69d9f0-0b40-41cb-bc47-3549a3af0389';
+
 const Index = () => {
   const [activeSection, setActiveSection] = useState<'chats' | 'contacts' | 'settings' | 'profile' | 'search' | 'archive'>('chats');
   const [activeChat, setActiveChat] = useState<number | null>(1);
   const [messageText, setMessageText] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedMembers, setSelectedMembers] = useState<number[]>([]);
+  const [selectedAdmins, setSelectedAdmins] = useState<number[]>([]);
+  const [groupName, setGroupName] = useState('');
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const { toast } = useToast();
 
-  const chats: Chat[] = [
-    { id: 1, name: 'Команда разработки', lastMessage: 'Встреча в 15:00', time: '14:23', unread: 3, avatar: 'КР', isGroup: true },
-    { id: 2, name: 'Мария Иванова', lastMessage: 'Отправила файлы', time: '13:45', unread: 0, avatar: 'МИ' },
-    { id: 3, name: 'Дизайн проекта', lastMessage: 'Алекс: Новые макеты готовы', time: '12:10', unread: 1, avatar: 'ДП', isGroup: true },
-    { id: 4, name: 'Петр Сидоров', lastMessage: 'Созвонимся завтра?', time: 'вчера', unread: 0, avatar: 'ПС' },
-    { id: 5, name: 'Архивный чат', lastMessage: 'Старое сообщение', time: '01.02', unread: 0, avatar: 'АЧ', isArchived: true },
-  ];
+  useEffect(() => {
+    loadChats();
+    loadContacts();
+  }, []);
 
-  const contacts: Contact[] = [
-    { id: 1, name: 'Мария Иванова', avatar: 'МИ', status: 'в сети' },
-    { id: 2, name: 'Петр Сидоров', avatar: 'ПС', status: 'был 2 часа назад' },
-    { id: 3, name: 'Анна Смирнова', avatar: 'АС', status: 'в сети' },
-    { id: 4, name: 'Иван Петров', avatar: 'ИП', status: 'был недавно' },
-  ];
+  useEffect(() => {
+    if (activeChat) {
+      loadMessages(activeChat);
+    }
+  }, [activeChat]);
 
-  const messages: Message[] = [
-    { id: 1, text: 'Привет! Как дела?', time: '14:20', isMine: false },
-    { id: 2, text: 'Отлично! Работаю над новым проектом', time: '14:21', isMine: true },
-    { id: 3, text: 'Звучит интересно! Расскажешь подробнее?', time: '14:22', isMine: false },
-    { id: 4, text: 'Конечно! Встреча в 15:00', time: '14:23', isMine: true },
-  ];
-
-  const filteredChats = chats.filter(chat => {
-    if (activeSection === 'archive') return chat.isArchived;
-    if (activeSection === 'search') return chat.name.toLowerCase().includes(searchQuery.toLowerCase());
-    return !chat.isArchived;
-  });
-
-  const handleSendMessage = () => {
-    if (messageText.trim()) {
-      setMessageText('');
+  const loadChats = async () => {
+    try {
+      const response = await fetch(`${API_URL}?action=chats`);
+      const data = await response.json();
+      setChats(data.chats || []);
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось загрузить чаты', variant: 'destructive' });
     }
   };
+
+  const loadContacts = async () => {
+    try {
+      const response = await fetch(`${API_URL}?action=contacts`);
+      const data = await response.json();
+      setContacts(data.contacts || []);
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось загрузить контакты', variant: 'destructive' });
+    }
+  };
+
+  const loadMessages = async (chatId: number) => {
+    try {
+      setLoading(true);
+      const response = await fetch(`${API_URL}?action=messages&chat_id=${chatId}`);
+      const data = await response.json();
+      setMessages(data.messages || []);
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось загрузить сообщения', variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!messageText.trim() || !activeChat) return;
+
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'send_message',
+          chat_id: activeChat,
+          text: messageText,
+          user_id: 1
+        })
+      });
+
+      const data = await response.json();
+      if (data.message) {
+        setMessages([...messages, data.message]);
+        setMessageText('');
+        loadChats();
+      }
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось отправить сообщение', variant: 'destructive' });
+    }
+  };
+
+  const handleCreateGroup = async () => {
+    if (!groupName.trim() || selectedMembers.length === 0) {
+      toast({ title: 'Внимание', description: 'Укажите название и выберите участников', variant: 'destructive' });
+      return;
+    }
+
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_group',
+          name: groupName,
+          member_ids: selectedMembers,
+          admin_ids: selectedAdmins
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        toast({ title: 'Успешно', description: 'Группа создана!' });
+        setDialogOpen(false);
+        setGroupName('');
+        setSelectedMembers([]);
+        setSelectedAdmins([]);
+        loadChats();
+      }
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось создать группу', variant: 'destructive' });
+    }
+  };
+
+  const filteredChats = chats.filter(chat => {
+    if (activeSection === 'archive') return chat.is_archived;
+    if (activeSection === 'search') return chat.name.toLowerCase().includes(searchQuery.toLowerCase());
+    return !chat.is_archived;
+  });
 
   const sidebarItems = [
     { id: 'chats', icon: 'MessageCircle', label: 'Чаты' },
@@ -124,7 +210,7 @@ const Index = () => {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="bg-secondary border-0"
               />
-              <Dialog>
+              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogTrigger asChild>
                   <Button size="icon" variant="ghost">
                     <Icon name="Plus" size={20} />
@@ -137,14 +223,31 @@ const Index = () => {
                   <div className="space-y-4 py-4">
                     <div>
                       <Label htmlFor="groupName">Название группы</Label>
-                      <Input id="groupName" placeholder="Введите название..." className="mt-2" />
+                      <Input 
+                        id="groupName" 
+                        placeholder="Введите название..." 
+                        className="mt-2"
+                        value={groupName}
+                        onChange={(e) => setGroupName(e.target.value)}
+                      />
                     </div>
                     <div>
                       <Label>Выберите участников</Label>
                       <div className="space-y-3 mt-3">
                         {contacts.map((contact) => (
                           <div key={contact.id} className="flex items-center space-x-3">
-                            <Checkbox id={`contact-${contact.id}`} />
+                            <Checkbox 
+                              id={`contact-${contact.id}`}
+                              checked={selectedMembers.includes(contact.id)}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setSelectedMembers([...selectedMembers, contact.id]);
+                                } else {
+                                  setSelectedMembers(selectedMembers.filter(id => id !== contact.id));
+                                  setSelectedAdmins(selectedAdmins.filter(id => id !== contact.id));
+                                }
+                              }}
+                            />
                             <label
                               htmlFor={`contact-${contact.id}`}
                               className="flex items-center gap-3 flex-1 cursor-pointer"
@@ -160,13 +263,36 @@ const Index = () => {
                         ))}
                       </div>
                     </div>
-                    <div>
-                      <Label>Назначить администраторов</Label>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Отметьте участников, которые станут администраторами группы
-                      </p>
-                    </div>
-                    <Button className="w-full">Создать группу</Button>
+                    {selectedMembers.length > 0 && (
+                      <div>
+                        <Label>Назначить администраторов</Label>
+                        <div className="space-y-3 mt-3">
+                          {selectedMembers.map((memberId) => {
+                            const contact = contacts.find(c => c.id === memberId);
+                            if (!contact) return null;
+                            return (
+                              <div key={memberId} className="flex items-center space-x-3">
+                                <Checkbox
+                                  id={`admin-${memberId}`}
+                                  checked={selectedAdmins.includes(memberId)}
+                                  onCheckedChange={(checked) => {
+                                    if (checked) {
+                                      setSelectedAdmins([...selectedAdmins, memberId]);
+                                    } else {
+                                      setSelectedAdmins(selectedAdmins.filter(id => id !== memberId));
+                                    }
+                                  }}
+                                />
+                                <label htmlFor={`admin-${memberId}`} className="cursor-pointer">
+                                  {contact.name}
+                                </label>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    <Button className="w-full" onClick={handleCreateGroup}>Создать группу</Button>
                   </div>
                 </DialogContent>
               </Dialog>
@@ -195,12 +321,12 @@ const Index = () => {
                       <div className="flex items-center justify-between mb-1">
                         <h3 className="font-medium flex items-center gap-2">
                           {chat.name}
-                          {chat.isGroup && <Icon name="Users" size={14} className="text-muted-foreground" />}
+                          {chat.is_group && <Icon name="Users" size={14} className="text-muted-foreground" />}
                         </h3>
                         <span className="text-xs text-muted-foreground">{chat.time}</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <p className="text-sm text-muted-foreground truncate">{chat.lastMessage}</p>
+                        <p className="text-sm text-muted-foreground truncate">{chat.last_message}</p>
                         {chat.unread > 0 && (
                           <span className="ml-2 px-2 py-0.5 rounded-full bg-primary text-primary-foreground text-xs font-medium">
                             {chat.unread}
@@ -305,25 +431,31 @@ const Index = () => {
             </div>
 
             <ScrollArea className="flex-1 p-6">
-              <div className="space-y-4">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.isMine ? 'justify-end' : 'justify-start'}`}
-                  >
+              {loading ? (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-muted-foreground">Загрузка...</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {messages.map((message) => (
                     <div
-                      className={`max-w-md px-4 py-2 rounded-2xl ${
-                        message.isMine
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-secondary text-secondary-foreground'
-                      }`}
+                      key={message.id}
+                      className={`flex ${message.is_mine ? 'justify-end' : 'justify-start'}`}
                     >
-                      <p className="text-sm">{message.text}</p>
-                      <span className="text-xs opacity-70 mt-1 block">{message.time}</span>
+                      <div
+                        className={`max-w-md px-4 py-2 rounded-2xl ${
+                          message.is_mine
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-secondary-foreground'
+                        }`}
+                      >
+                        <p className="text-sm">{message.text}</p>
+                        <span className="text-xs opacity-70 mt-1 block">{message.time}</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </ScrollArea>
 
             <div className="p-4 bg-card border-t border-border">

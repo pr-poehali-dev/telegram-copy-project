@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "name": "Get chats list",
+      "method": "GET",
+      "path": "/?action=chats",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Get messages for chat",
+      "method": "GET",
+      "path": "/?action=messages&chat_id=1",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Send message",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "action": "send_message",
+        "chat_id": 1,
+        "text": "Test message",
+        "user_id": 1
+      },
+      "expectedStatus": 200
+    }
+  ]
+}
